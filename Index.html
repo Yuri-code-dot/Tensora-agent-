@@ -25,6 +25,8 @@
   }
   .brand { color:var(--accent); font-weight:800; letter-spacing:2px; font-size:18px; }
   .sub { color:var(--dim); font-size:10px; flex:1; }
+  .status { font-size:10px; color:var(--ok); padding:4px 8px; }
+  .status.offline { color:var(--err); }
   .clr {
     border:1px solid var(--border); color:var(--dim);
     padding:4px 8px; font-size:10px; background:none; border-radius:4px;
@@ -89,6 +91,7 @@
 <header>
   <div class="brand">◢ TENSORA</div>
   <div class="sub">// neural.interface.v1</div>
+  <div class="status" id="status">● connecting...</div>
   <button class="clr" onclick="clearChat()">CLR</button>
 </header>
 
@@ -109,10 +112,142 @@
 </footer>
 
 <script>
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIGURATION - Update these to match your backend
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CONFIG = {
+  API_URL: localStorage.getItem('tensora_api_url') || 'http://localhost:8000/api',
+  API_KEY: localStorage.getItem('tensora_api_key') || '',
+  USE_MOCK: localStorage.getItem('tensora_use_mock') === 'true' || true, // Set to false when backend is ready
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORE STATE & UI
+// ═══════════════════════════════════════════════════════════════════════════
+
 const ACCENT = { INSTANT:'#00f0ff', EXTREME:'#a855f7', MAX:'#ff2bd6' };
 let mode = 'INSTANT';
 let history = JSON.parse(localStorage.getItem('tensora_v1') || '{"INSTANT":[],"EXTREME":[],"MAX":[]}');
 let busy = false;
+let backendOnline = false;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BACKEND HEALTH CHECK
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function checkBackendHealth() {
+  if (CONFIG.USE_MOCK) {
+    updateStatus(true);
+    return;
+  }
+  
+  try {
+    const response = await fetch(`${CONFIG.API_URL}/health`, { timeout: 5000 });
+    if (response.ok) {
+      updateStatus(true);
+    } else {
+      updateStatus(false);
+    }
+  } catch (e) {
+    updateStatus(false);
+  }
+}
+
+function updateStatus(online) {
+  backendOnline = online;
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = online ? '● connected' : '● offline (mock)';
+  statusEl.className = online ? 'status' : 'status offline';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN LLM API FUNCTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function callLLM(prompt, system='', agent='') {
+  if (CONFIG.USE_MOCK || !backendOnline) {
+    // Mock response for development
+    await new Promise(r=>setTimeout(r, 400+Math.random()*700));
+    return `[mock] ${system?`(${system.slice(0,25)}…) `:''}${prompt.slice(0,140)}`;
+  }
+
+  try {
+    const payload = {
+      prompt,
+      system,
+      agent,
+      mode,
+      timestamp: Date.now()
+    };
+
+    const response = await fetch(`${CONFIG.API_URL}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(CONFIG.API_KEY && { 'Authorization': `Bearer ${CONFIG.API_KEY}` })
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Backend error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.reply || data.content || 'No response from backend';
+  } catch (e) {
+    log('LLM', `error: ${e.message}`, 'err');
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MODE IMPLEMENTATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function runInstant(p) {
+  return await callLLM(p, 'fast helpful assistant');
+}
+
+async function runExtreme(p) {
+  log('PLANNER','decomposing…');
+  const plan = await callLLM(`Plan steps for: ${p}`, 'planner', 'PLANNER');
+  log('PLANNER','plan ready','ok');
+  
+  log('WRITER','drafting…');
+  const draft = await callLLM(`Plan:\n${plan}\nTask: ${p}`, 'writer', 'WRITER');
+  log('REVIEWER','critiquing…');
+  const crit = await callLLM(`Critique:\n${draft}`, 'reviewer', 'REVIEWER');
+  
+  log('WRITER','revising…');
+  const final = await callLLM(`Revise per critique.\nDraft:${draft}\nCrit:${crit}`, 'finalizer', 'FINALIZER');
+  log('EXTREME','✓ done','ok');
+  return final;
+}
+
+async function runMax(p) {
+  const AGENTS = ['RESEARCH','CODING','REVIEW','OPTIMIZE','TESTING','UI','LOGIC','DATA','DEBUG','DEPLOY'];
+  log('SYSTEM',`spawning ${AGENTS.length} agents…`);
+  
+  const results = await Promise.all(AGENTS.map(async a=>{
+    log(a,'booting…');
+    await new Promise(r=>setTimeout(r,200+Math.random()*500));
+    log(a,'processing…');
+    const out = await callLLM(`Task:${p}\nRole:${a}`, a, a);
+    log(a,'✓ complete','ok');
+    return `## ${a}\n${out}`;
+  }));
+  
+  log('SYNTH','merging…');
+  const final = await callLLM(`Combine:\n${results.join('\n\n')}\nUser task:${p}`, 'synth', 'SYNTH');
+  log('SYNTH','✓ ready','ok');
+  return final;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UI FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
 
 function setMode(m){
   mode = m;
@@ -172,46 +307,14 @@ function log(agent, text, level){
   box.innerHTML += `<span class="line"><span class="time">[${time}]</span> <span style="color:${color}">${agent.padEnd(8)}</span> ${text}</span>`;
   box.scrollTop = box.scrollHeight;
 }
-function clearLog(){ document.getElementById('log').innerHTML = '<div class="hdr">┌── AGENT ACTIVITY ──────────────┐</div>'; }
 
-// === MOCK LLM — replace with real API ===
-async function callLLM(prompt, system=''){
-  await new Promise(r=>setTimeout(r, 400+Math.random()*700));
-  return `[mock] ${system?`(${system.slice(0,25)}…) `:''}${prompt.slice(0,140)}`;
+function clearLog(){ 
+  document.getElementById('log').innerHTML = '<div class="hdr">┌── AGENT ACTIVITY ──────────────┐</div>'; 
 }
 
-async function runInstant(p){
-  return await callLLM(p, 'fast helpful assistant');
-}
-async function runExtreme(p){
-  log('PLANNER','decomposing…');
-  const plan = await callLLM(`Plan steps for: ${p}`, 'planner');
-  log('PLANNER','plan ready','ok');
-  log('WRITER','drafting…');
-  const draft = await callLLM(`Plan:\n${plan}\nTask: ${p}`, 'writer');
-  log('REVIEWER','critiquing…');
-  const crit = await callLLM(`Critique:\n${draft}`, 'reviewer');
-  log('WRITER','revising…');
-  const final = await callLLM(`Revise per critique.\nDraft:${draft}\nCrit:${crit}`, 'finalizer');
-  log('EXTREME','✓ done','ok');
-  return final;
-}
-async function runMax(p){
-  const AGENTS = ['RESEARCH','CODING','REVIEW','OPTIMIZE','TESTING','UI','LOGIC','DATA','DEBUG','DEPLOY'];
-  log('SYSTEM',`spawning ${AGENTS.length} agents…`);
-  const results = await Promise.all(AGENTS.map(async a=>{
-    log(a,'booting…');
-    await new Promise(r=>setTimeout(r,200+Math.random()*500));
-    log(a,'processing…');
-    const out = await callLLM(`Task:${p}\nRole:${a}`, a);
-    log(a,'✓ complete','ok');
-    return `## ${a}\n${out}`;
-  }));
-  log('SYNTH','merging…');
-  const final = await callLLM(`Combine:\n${results.join('\n\n')}\nUser task:${p}`, 'synth');
-  log('SYNTH','✓ ready','ok');
-  return final;
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// MESSAGE SENDING
+// ═══════════════════════════════════════════════════════════════════════════
 
 async function send(){
   if(busy) return;
@@ -246,8 +349,28 @@ document.getElementById('input').addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════════════
+
 setMode('INSTANT');
 render();
+checkBackendHealth();
+setInterval(checkBackendHealth, 30000); // Check every 30 seconds
+
+// Optional: Add settings panel (uncomment to enable)
+window.setBackendConfig = function(url, key, useMock) {
+  localStorage.setItem('tensora_api_url', url);
+  localStorage.setItem('tensora_api_key', key);
+  localStorage.setItem('tensora_use_mock', useMock);
+  location.reload();
+};
+
+console.log('TENSORA initialized. Config:', { 
+  API_URL: CONFIG.API_URL, 
+  USE_MOCK: CONFIG.USE_MOCK,
+  API_KEY: CONFIG.API_KEY ? '***' : 'none'
+});
 </script>
 </body>
 </html>
