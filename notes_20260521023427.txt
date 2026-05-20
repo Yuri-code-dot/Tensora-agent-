@@ -1,0 +1,254 @@
+05.21 2:29 AM
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>◢ TENSORA</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg:#0a0a0f; --panel:#10101a; --input:#15151f; --border:#1f1f2e;
+    --text:#e4e4e7; --dim:#6b6b80;
+    --instant:#00f0ff; --extreme:#a855f7; --max:#ff2bd6;
+    --ok:#22ff88; --warn:#ffaa00; --err:#ff3355;
+    --accent: var(--instant);
+  }
+  body {
+    background:var(--bg); color:var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    height:100vh; display:flex; flex-direction:column; overflow:hidden;
+  }
+  header {
+    padding:14px 16px 10px; background:var(--panel);
+    border-bottom:1px solid var(--accent);
+    display:flex; align-items:flex-end; gap:8px;
+  }
+  .brand { color:var(--accent); font-weight:800; letter-spacing:2px; font-size:18px; }
+  .sub { color:var(--dim); font-size:10px; flex:1; }
+  .clr {
+    border:1px solid var(--border); color:var(--dim);
+    padding:4px 8px; font-size:10px; background:none; border-radius:4px;
+    font-family:inherit; cursor:pointer;
+  }
+  .modes { display:flex; gap:8px; padding:10px; background:var(--panel);
+    border-bottom:1px solid var(--border); }
+  .modes button {
+    flex:1; padding:10px; background:none; border:1px solid var(--border);
+    color:var(--dim); border-radius:6px; font-family:inherit;
+    font-size:12px; letter-spacing:1px; font-weight:700; cursor:pointer;
+  }
+  .modes button.active.INSTANT { border-color:var(--instant); color:var(--instant); background:#00f0ff15; box-shadow:0 0 12px #00f0ff40; }
+  .modes button.active.EXTREME { border-color:var(--extreme); color:var(--extreme); background:#a855f715; box-shadow:0 0 12px #a855f740; }
+  .modes button.active.MAX     { border-color:var(--max);     color:var(--max);     background:#ff2bd615; box-shadow:0 0 12px #ff2bd640; }
+  #chat { flex:1; overflow-y:auto; padding:8px 0; }
+  .msg { padding:0 12px; margin:6px 0; display:flex; }
+  .msg.user { justify-content:flex-end; }
+  .bubble {
+    max-width:90%; border:1px solid var(--border);
+    background:var(--input); padding:10px; border-radius:6px;
+  }
+  .msg.bot .bubble { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+  .tag { font-size:10px; letter-spacing:1px; margin-bottom:4px; color:var(--dim); }
+  .msg.bot .tag { color:var(--accent); }
+  .body { font-size:13px; line-height:19px; white-space:pre-wrap; word-break:break-word; }
+  #log {
+    margin:8px 10px; padding:8px; border:1px solid var(--max);
+    background:#08080d; border-radius:4px; max-height:170px; overflow-y:auto;
+    font-size:11px; line-height:16px; display:none;
+  }
+  #log.show { display:block; }
+  #log .hdr { color:var(--max); font-size:10px; }
+  #log .line { display:block; }
+  #log .time { color:var(--dim); }
+  .busy { padding:4px 12px; color:var(--accent); font-size:11px; }
+  footer {
+    display:flex; gap:8px; padding:8px;
+    background:var(--panel); border-top:1px solid var(--accent);
+    align-items:center;
+  }
+  .prompt { color:var(--accent); font-weight:700; font-size:16px; }
+  #input {
+    flex:1; background:var(--input); color:var(--text);
+    border:none; border-radius:4px; padding:10px;
+    font-family:inherit; font-size:13px; resize:none; max-height:100px;
+  }
+  #input:focus { outline:1px solid var(--accent); }
+  #send {
+    border:1px solid var(--accent); color:var(--accent);
+    background:none; padding:10px 14px; border-radius:4px;
+    font-family:inherit; font-size:12px; font-weight:700;
+    letter-spacing:1px; cursor:pointer;
+  }
+  #send:disabled { opacity:.4; }
+  .empty { text-align:center; padding:40px 20px; color:var(--accent); font-size:12px; }
+  .empty .hint { color:var(--dim); margin-top:14px; font-size:11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">◢ TENSORA</div>
+  <div class="sub">// neural.interface.v1</div>
+  <button class="clr" onclick="clearChat()">CLR</button>
+</header>
+
+<div class="modes">
+  <button data-mode="INSTANT" class="active INSTANT" onclick="setMode('INSTANT')">▶ INSTANT</button>
+  <button data-mode="EXTREME" onclick="setMode('EXTREME')">▶ EXTREME</button>
+  <button data-mode="MAX"     onclick="setMode('MAX')">▶ MAX</button>
+</div>
+
+<div id="chat"></div>
+<div id="log"></div>
+<div id="busy" class="busy" style="display:none;"> processing</div>
+
+<footer>
+  <span class="prompt">&gt;</span>
+  <textarea id="input" rows="1" placeholder="message tensora.instant"></textarea>
+  <button id="send" onclick="send()">SEND</button>
+</footer>
+
+<script>
+const ACCENT = { INSTANT:'#00f0ff', EXTREME:'#a855f7', MAX:'#ff2bd6' };
+let mode = 'INSTANT';
+let history = JSON.parse(localStorage.getItem('tensora_v1') || '{"INSTANT":[],"EXTREME":[],"MAX":[]}');
+let busy = false;
+
+function setMode(m){
+  mode = m;
+  document.documentElement.style.setProperty('--accent', ACCENT[m]);
+  document.querySelectorAll('.modes button').forEach(b=>{
+    b.classList.remove('active','INSTANT','EXTREME','MAX');
+    if(b.dataset.mode===m){ b.classList.add('active', m); }
+  });
+  document.getElementById('input').placeholder = `message tensora.${m.toLowerCase()}`;
+  document.getElementById('log').classList.toggle('show', m==='MAX');
+  render();
+}
+
+function render(){
+  const chat = document.getElementById('chat');
+  const msgs = history[mode];
+  if(!msgs.length){
+    chat.innerHTML = `<div class="empty">
+      ╔═══════════════════════╗<br>
+      ║  TENSORA.${mode.padEnd(8)}    ║<br>
+      ║  awaiting input...    ║<br>
+      ╚═══════════════════════╝
+      <div class="hint">${mode==='INSTANT'?'fast single-AI replies':mode==='EXTREME'?'deep step-by-step reasoning':'10 parallel agents'}</div>
+    </div>`;
+    return;
+  }
+  chat.innerHTML = msgs.map(m=>`
+    <div class="msg ${m.role==='user'?'user':'bot'}">
+      <div class="bubble">
+        <div class="tag">${m.role==='user'?'> USER':'< TENSORA.'+m.mode}</div>
+        <div class="body">${escapeHtml(m.content)}</div>
+      </div>
+    </div>`).join('');
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function pushMsg(role,content){
+  history[mode].push({role,mode,content,ts:Date.now()});
+  localStorage.setItem('tensora_v1', JSON.stringify(history));
+  render();
+}
+
+function clearChat(){
+  if(confirm(`Wipe ${mode} history?`)){
+    history[mode] = [];
+    localStorage.setItem('tensora_v1', JSON.stringify(history));
+    render();
+  }
+}
+
+function log(agent, text, level){
+  const box = document.getElementById('log');
+  const color = level==='ok'?'var(--ok)':level==='err'?'var(--err)':'var(--max)';
+  const time = new Date().toLocaleTimeString().slice(0,8);
+  box.innerHTML += `<span class="line"><span class="time">[${time}]</span> <span style="color:${color}">${agent.padEnd(8)}</span> ${text}</span>`;
+  box.scrollTop = box.scrollHeight;
+}
+function clearLog(){ document.getElementById('log').innerHTML = '<div class="hdr">┌── AGENT ACTIVITY ──────────────┐</div>'; }
+
+// === MOCK LLM — replace with real API ===
+async function callLLM(prompt, system=''){
+  await new Promise(r=>setTimeout(r, 400+Math.random()*700));
+  return `[mock] ${system?`(${system.slice(0,25)}…) `:''}${prompt.slice(0,140)}`;
+}
+
+async function runInstant(p){
+  return await callLLM(p, 'fast helpful assistant');
+}
+async function runExtreme(p){
+  log('PLANNER','decomposing…');
+  const plan = await callLLM(`Plan steps for: ${p}`, 'planner');
+  log('PLANNER','plan ready','ok');
+  log('WRITER','drafting…');
+  const draft = await callLLM(`Plan:\n${plan}\nTask: ${p}`, 'writer');
+  log('REVIEWER','critiquing…');
+  const crit = await callLLM(`Critique:\n${draft}`, 'reviewer');
+  log('WRITER','revising…');
+  const final = await callLLM(`Revise per critique.\nDraft:${draft}\nCrit:${crit}`, 'finalizer');
+  log('EXTREME','✓ done','ok');
+  return final;
+}
+async function runMax(p){
+  const AGENTS = ['RESEARCH','CODING','REVIEW','OPTIMIZE','TESTING','UI','LOGIC','DATA','DEBUG','DEPLOY'];
+  log('SYSTEM',`spawning ${AGENTS.length} agents…`);
+  const results = await Promise.all(AGENTS.map(async a=>{
+    log(a,'booting…');
+    await new Promise(r=>setTimeout(r,200+Math.random()*500));
+    log(a,'processing…');
+    const out = await callLLM(`Task:${p}\nRole:${a}`, a);
+    log(a,'✓ complete','ok');
+    return `## ${a}\n${out}`;
+  }));
+  log('SYNTH','merging…');
+  const final = await callLLM(`Combine:\n${results.join('\n\n')}\nUser task:${p}`, 'synth');
+  log('SYNTH','✓ ready','ok');
+  return final;
+}
+
+async function send(){
+  if(busy) return;
+  const inp = document.getElementById('input');
+  const text = inp.value.trim();
+  if(!text) return;
+  inp.value = '';
+  pushMsg('user', text);
+  busy = true;
+  document.getElementById('send').disabled = true;
+  document.getElementById('busy').style.display = 'block';
+  document.getElementById('busy').textContent = ` tensora.${mode.toLowerCase()} processing`;
+  clearLog();
+  if(mode==='MAX') document.getElementById('log').classList.add('show');
+
+  try {
+    let reply;
+    if(mode==='INSTANT') reply = await runInstant(text);
+    else if(mode==='EXTREME') reply = await runExtreme(text);
+    else reply = await runMax(text);
+    pushMsg('assistant', reply);
+  } catch(e) {
+    pushMsg('assistant', '[ERROR] '+e.message);
+  } finally {
+    busy = false;
+    document.getElementById('send').disabled = false;
+    document.getElementById('busy').style.display = 'none';
+  }
+}
+
+document.getElementById('input').addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+});
+
+setMode('INSTANT');
+render();
+</script>
+</body>
+</html>
